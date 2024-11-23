@@ -1,0 +1,6 @@
+.venv/
+compressed_array.npz
+compressed_dataframe.csv.gz
+arxiv-metadata-oai-snapshot.json
+arxiv_cs_CY_articles.csv
+.DS_Store
