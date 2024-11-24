@@ -6,18 +6,58 @@ import pandas as pd
 import numpy as np
 import faiss
 from sentence_transformers import SentenceTransformer, CrossEncoder
+import boto3
+import io
+import os
+
+
+AWS_ACCESS_KEY = os.getenv('AWS_ACCESS_KEY')
+AWS_SECRET_KEY = os.getenv('AWS_SECRET_KEY')
+AWS_BUCKET_NAME = 'se4ml-data'
+AWS_REGION = 'us-east-2'
+S3_EMBEDS_KEY = 'backend/compressed_array.npz'
+S3_DF_KEY = 'backend/compressed_dataframe.csv.gz'
+
+def download_file_from_s3(bucket_name, s3_key):
+    s3_client = boto3.client(
+        's3',
+        aws_access_key_id=AWS_ACCESS_KEY,
+        aws_secret_access_key=AWS_SECRET_KEY,
+        region_name=AWS_REGION
+    )
+    
+    file_obj = io.BytesIO()
+    s3_client.download_fileobj(bucket_name, s3_key, file_obj)
+    file_obj.seek(0)
+    return file_obj
 
 # Paths to pre-saved data
-PATH_TO_EMBEDS = 'compressed_array.npz'
-PATH_TO_DF = 'compressed_dataframe.csv.gz'
+PATH_TO_EMBEDS = 'data/compressed_array.npz'
+PATH_TO_DF = 'data/compressed_dataframe.csv.gz'
 
 # Initialize models
 model = SentenceTransformer("all-MiniLM-L6-v2")
 cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
 
 # Load embeddings and DataFrame
-embeddings = np.load(PATH_TO_EMBEDS)['array_data']
-df_data = pd.read_csv(PATH_TO_DF, compression='gzip')
+def download_file_from_s3(bucket_name, s3_key):
+    s3_client = boto3.client(
+        's3',
+        aws_access_key_id=AWS_ACCESS_KEY,
+        aws_secret_access_key=AWS_SECRET_KEY,
+        region_name=AWS_REGION
+    )
+    
+    file_obj = io.BytesIO()
+    s3_client.download_fileobj(bucket_name, s3_key, file_obj)
+    file_obj.seek(0)
+    return file_obj
+        
+embeddings_file = download_file_from_s3(AWS_BUCKET_NAME, S3_EMBEDS_KEY)
+embeddings = np.load(embeddings_file)['array_data']
+
+df_file = download_file_from_s3(AWS_BUCKET_NAME, S3_DF_KEY)
+df_data = pd.read_csv(df_file, compression='gzip')
 
 # Initialize FAISS index
 embed_length = embeddings.shape[1]
@@ -29,6 +69,7 @@ app = FastAPI()
 
 # CORS Configuration
 origins = [
+    "https://se4ml-frontend-aea8e8a17cba.herokuapp.com",
     "http://localhost",  # Local development
     "http://localhost:3000",  # React app or similar running on port 3000
     "https://example.com",  # Add any other domains that should be allowed
@@ -61,7 +102,6 @@ class SearchResult(BaseModel):
 class Topic(BaseModel):
     topic: str
     score: float
-
 
 def run_faiss_search(query_text, top_k):
     query = [query_text]
@@ -97,19 +137,6 @@ def run_rerank(index_vals_list, query_text):
     return pred_list
 
 
-def extract_topics(df):
-    tfidf = TfidfVectorizer(stop_words='english', max_features=10)
-    X = tfidf.fit_transform(df['prepared_text']) 
-
-    feature_names = tfidf.get_feature_names_out()
-    dense = X.todense()
-    topic_scores = dense.sum(axis=0).A1
-    topic_data = list(zip(feature_names, topic_scores))
-
-    sorted_topics = sorted(topic_data, key=lambda x: x[1], reverse=True)
-
-    return sorted_topics[:10]
-
 @app.post("/search", response_model=List[SearchResult])
 def search_arxiv(request: SearchRequest):
     try:
@@ -118,12 +145,3 @@ def search_arxiv(request: SearchRequest):
         return pred_list[:request.num_results_to_print]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-
-@app.get("/topics", response_model=List[Topic])
-def get_topics():
-    try:
-        topics = extract_topics(df_data)
-        return [{"topic": topic, "score": score} for topic, score in topics]
-    except Exception as e:
-        return {"error": str(e)}
